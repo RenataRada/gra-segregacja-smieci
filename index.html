@@ -1,0 +1,703 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<title>Śmieci nad Gąskami</title>
+<style>
+  body { font-family: Arial, background:#eef2f3; margin:0; }
+  #container { display:flex; justify-content:center; margin-top:20px; }
+  #leftPanel { text-align:center; }
+  #rightPanel { margin-left:20px; font-size:16px; }
+  canvas { background:white; border:2px solid #333; display:block; margin:10px auto; }
+  button { padding:8px 16px; margin:4px; font-size:15px; }
+
+  #praise, #truckMessage, #trendMessage, #endMessage {
+    position:absolute; left:50%; transform:translateX(-50%);
+    font-weight:bold; text-align:center; pointer-events:none;
+  }
+
+  #praise { top:360px; font-size:26px; color:green; opacity:0; transition:opacity .3s; }
+  #truckMessage { top:210px; font-size:26px; color:#444; opacity:0; transition:opacity .3s; }
+
+  /* STAŁY KOMUNIKAT TRENDOWY — NIE ZNIKA */
+  #trendMessage {
+    top:250px;
+    font-size:22px;
+    color:#222;
+    opacity:1;
+  }
+
+  #endMessage { top:120px; font-size:28px; color:black; opacity:0; transition:opacity .4s; width:90%; }
+
+  /* LICZNIKI MAS (KG) */
+  #massCounters {
+    font-size:18px;
+    font-weight:bold;
+    margin-top:6px;
+    text-align:center;
+    color:#003366;
+  }
+
+  #stats { font-size:16px; text-align:center; margin-top:4px; }
+</style>
+</head>
+<body>
+
+<div id="container">
+  <div id="leftPanel">
+    <h2>Śmieci nad Gąskami – gra edukacyjna</h2>
+    <div>
+      <button onclick="startGame()">START</button>
+      <button onclick="togglePause()">PAUZA</button>
+      <button onclick="endGame()">KONIEC</button>
+    </div>
+
+    <div style="margin-top:8px;">
+      Prędkość spadania:
+      <input type="range" id="speedSlider" min="1" max="5" step="1" value="2" tabindex="-1">
+    </div>
+
+    <canvas id="gameCanvas" width="700" height="450"></canvas>
+
+    <!-- NOWY LICZNIK MAS -->
+    <div id="massCounters"></div>
+
+    <!-- PROPORCJE % -->
+    <div id="stats"></div>
+  </div>
+
+  <div id="rightPanel">
+    <b>Przyciski:</b><br>
+    START – nowa gra od zera<br>
+    PAUZA – zatrzymanie / wznowienie<br>
+    KONIEC – twarde zakończenie z raportem<br><br>
+    <b>Sterowanie:</b><br>
+    ← → – wybór kosza<br>
+    ↓ – natychmiastowy wrzut śmiecia<br>
+    ↑ – utylizacja śmiecia PSZOK (zestrzelenie)<br><br>
+    <b>Cel:</b><br>
+    Utrzymaj odrzut poniżej 40%<br>
+    i wysoki poziom recyklingu.
+  </div>
+</div>
+
+<div id="praise"></div>
+<div id="truckMessage"></div>
+
+<!-- STAŁY KOMUNIKAT TRENDOWY -->
+<div id="trendMessage"></div>
+
+<div id="boomEffect" style="
+  position:absolute;
+  top:160px;
+  left:50%;
+  transform:translateX(-50%);
+  font-size:160px;
+  opacity:0;
+  transition:opacity .25s;
+  pointer-events:none;
+  z-index:9999;
+"></div>
+
+<div id="endMessage"></div>
+
+<script>
+
+// --- DANE O ŚMIECIACH ---
+const trashItems = [
+  // żółty – metale i tworzywa
+  { name:"Butelka PET (czysta)", correct:"żółty", weight:2, speedBonus:0.2 },
+  { name:"Butelka PET (brudna)", correct:"zmieszane", weight:2, speedBonus:0.2 },
+  { name:"Puszka aluminiowa", correct:"żółty", weight:1, speedBonus:0.3 },
+  { name:"Folia aluminiowa (czysta)", correct:"żółty", weight:1, speedBonus:0.2 },
+  { name:"Folia aluminiowa (brudna)", correct:"zmieszane", weight:1, speedBonus:0.3 },
+  { name:"Opakowanie po jogurcie", correct:"żółty", weight:1, speedBonus:0.2 },
+  { name:"Styropian opakowaniowy", correct:"żółty", weight:3, speedBonus:0.3 },
+  { name:"Kartonik po mleku", correct:"żółty", weight:2, speedBonus:0.3 },
+
+  // niebieski – papier
+  { name:"Kartka papieru", correct:"niebieski", weight:1, speedBonus:0.2 },
+  { name:"Gazeta", correct:"niebieski", weight:2, speedBonus:0.2 },
+  { name:"Zeszyt (bez spirali)", correct:"niebieski", weight:2, speedBonus:0.3 },
+  { name:"Paragon", correct:"zmieszane", weight:1, speedBonus:0.4 },
+
+  // zielony – szkło
+  { name:"Słoik szklany (bez nakrętki)", correct:"zielony", weight:4, speedBonus:0.3 },
+  { name:"Butelka szklana", correct:"zielony", weight:4, speedBonus:0.3 },
+  { name:"Słoik opróżniony, z etykietą", correct:"zielony", weight:4, speedBonus:0.3 },
+
+  // brązowy – bio
+  { name:"Obierki i pieczywo", correct:"brązowy", weight:2, speedBonus:0.2 },
+  { name:"Skórka od banana", correct:"brązowy", weight:1, speedBonus:0.2 },
+  { name:"Fusy z kawy", correct:"brązowy", weight:1, speedBonus:0.2 },
+
+  // czarny – zmieszane
+  { name:"Zużyta chusteczka", correct:"zmieszane", weight:1, speedBonus:0.3 },
+  { name:"Pielucha jednorazowa", correct:"zmieszane", weight:5, speedBonus:0.6 },
+  { name:"Szkło żaroodporne", correct:"zmieszane", weight:4, speedBonus:0.5 },
+  { name:"Potłuczona filiżanka ceramiczna", correct:"zmieszane", weight:4, speedBonus:0.5 },
+  { name:"Talerz porcelanowy", correct:"zmieszane", weight:4, speedBonus:0.5 },
+  { name:"Doniczka ceramiczna", correct:"zmieszane", weight:5, speedBonus:0.6 },
+  { name:"Lustro", correct:"zmieszane", weight:6, speedBonus:0.7 },
+  { name:"Popielniczka szklana", correct:"zmieszane", weight:4, speedBonus:0.5 },
+  { name:"Szklanka (nieopakowaniowa)", correct:"zmieszane", weight:3, speedBonus:0.4 },
+  { name:"kości, ryby, nabiał", correct:"zmieszane", weight:2, speedBonus:0.4 },
+  { name:"Znicz z woskiem (nieopróżniony)", correct:"zmieszane", weight:6, speedBonus:0.7 },
+  { name:"Słoik szklany z resztkami jedzenia", correct:"zmieszane", weight:5, speedBonus:0.0 },
+
+  // odzież – różowy
+  { name:"Koszulka bawełniana", correct:"odzież", weight:2, speedBonus:0.2 },
+  { name:"Spodnie jeansowe", correct:"odzież", weight:3, speedBonus:0.2 },
+  { name:"Bluza polarowa", correct:"odzież", weight:2, speedBonus:0.2 },
+  { name:"Stare buty", correct:"odzież", weight:2, speedBonus:0.2 },
+  { name:"Pościel", correct:"odzież", weight:3, speedBonus:0.2 },
+  { name:"Uszkodzona odzież", correct:"odzież", weight:2, speedBonus:0.2 },
+
+  // trudne / podchwytliwe
+  { name:"Saszetka po karmie dla kota", correct:"zmieszane", weight:1, speedBonus:0.2 },
+  { name:"Opakowanie po chipsach (folia metalizowana)", correct:"zmieszane", weight:1, speedBonus:0.2 },
+  { name:"Blister po tabletkach", correct:"zmieszane", weight:1, speedBonus:0.2 },
+  { name:"Tubka po paście do zębów", correct:"zmieszane", weight:1, speedBonus:0.25 },
+  { name:"Kartonik po soku (Tetra Pak)", correct:"żółty", weight:2, speedBonus:0.3 },
+  { name:"Papier po maśle", correct:"zmieszane", weight:1, speedBonus:0.2 },
+  { name:"Paragon sklepowy", correct:"zmieszane", weight:1, speedBonus:0.3 },
+  { name:"Jednorazowy kubek po kawie", correct:"zmieszane", weight:2, speedBonus:0.3 },
+  { name:"Folia po czekoladzie", correct:"zmieszane", weight:1, speedBonus:0.2 },
+  { name:"Gąbka do mycia naczyń", correct:"zmieszane", weight:1, speedBonus:0.2 },
+
+  // PSZOK do zestrzelenia jako epizodyczne urozmaicenie bez wynikowe
+   { name:"kanapa", correct:"pszok", weight:0, speedBonus:0.4 },
+   { name:"baterie", correct:"pszok", weight:0, speedBonus:0.4 },
+   { name:"lekarstwa", correct:"pszok", weight:0, speedBonus:0.4 },
+   { name:"farby", correct:"pszok", weight:0, speedBonus:0.4 },
+   { name:"gałęzie, liście, trawa", correct:"pszok", weight:0, speedBonus:0.4 }
+
+];
+
+// --- KOSZE ---
+// fill – całkowita masa w koszu
+// trips – liczba wywozów
+// correct / wrong – masa poprawna / błędna w tym koszu (do sortowni)
+const bins = [
+  { name:"żółty",   label:"Metale i tworzywa", x:80,  color:"#ffd800", fill:0, capacity:20, trips:0 },
+  { name:"niebieski",label:"Papier",           x:180, color:"#7ec8ff", fill:0, capacity:20, trips:0 },
+  { name:"zielony", label:"Szkło",             x:280, color:"#7dff7d", fill:0, capacity:20, trips:0 },
+  { name:"brązowy", label:"Bio",               x:380, color:"#8b4513", fill:0, capacity:20, trips:0 },
+  { name:"zmieszane",  label:"Zmieszane",         x:480, color:"#888888", fill:0, capacity:20, trips:0 },
+  { name:"odzież",  label:"Odzież",            x:580, color:"#ff80c0", fill:0, capacity:20, trips:0 }
+];
+
+const canvas = document.getElementById("gameCanvas");
+const ctx = canvas.getContext("2d");
+const praiseDiv = document.getElementById("praise");
+const truckDiv = document.getElementById("truckMessage");
+const trendDiv = document.getElementById("trendMessage");
+const endDiv = document.getElementById("endMessage");
+const massCounters = document.getElementById("massCounters");
+const statsDiv = document.getElementById("stats");
+const speedSlider = document.getElementById("speedSlider");
+
+let running = false;
+let paused = false;
+let activeBin = 0;
+let trash = null;
+
+let recycledKg = 0;  // masa recyklingu
+let rejectKg = 0;    // masa odrzutu
+let recycling = 0;   // % recyklingu
+let reject = 0;      // % odrzutu
+let wrongToMixedKg = 0;   //błędny wrzut
+
+let lastRecycling = 0; // DO TRENDÓW
+
+let flashBinIndex = -1;
+let flashColor = null;
+let flashIcon = null;
+let flashTimer = 0;
+
+// --- WYKRES ---
+let chartPoints = [];
+let chartOffsetX = 0;
+
+const chartBottom = 300;
+const chartTop = 80;
+const chartHeight = chartBottom - chartTop;
+
+// --- START GRY ---
+function startGame() {
+  chartPoints = [];
+  chartOffsetX = 0;
+
+  running = true;
+  paused = false;
+  activeBin = 0;
+
+  recycledKg = 0;
+  rejectKg = 0;
+  recycling = 0;
+  reject = 0;
+  lastRecycling = 0;
+wrongToMixedKg = 0;
+
+  bins.forEach(b => {
+    b.fill = 0;
+    b.trips = 0;
+    b.correct = 0;
+    b.wrong = 0;
+  });
+
+  trash = null;
+  spawnTrash();
+
+  endDiv.style.opacity = 0;
+  truckDiv.style.opacity = 0;
+
+  trendDiv.textContent = ""; // czyścimy trend
+  updateMassCounters();      // zerujemy liczniki
+}
+
+// --- PAUZA ---
+function togglePause() {
+  if (!running) return;
+  paused = !paused;
+}
+
+// --- KONIEC GRY ---
+function endGame() {
+  if (!running && !trash) return;
+  running = false;
+  paused = false;
+  trash = null;
+  showFinalReport();
+}
+
+// --- LOSOWANIE ŚMIECI ---
+function spawnTrash() {
+  const item = trashItems[Math.floor(Math.random() * trashItems.length)];
+
+  trash = {
+    ...item,
+    x: 80,
+    y: 0,
+    speed: 0.4 + item.speedBonus
+  };
+
+  // --- SPECJALNE ZACHOWANIE DLA ŚMIECI PSZOK ---
+  if (trash.correct === "pszok") {
+      trash.y = 0;        // startuje wysoko (możesz zmienić np. na -20)
+      trash.speed = 0.3;  // wolniejszy spadek
+  }
+}
+
+// --- POCHWAŁA ---
+function showPraise(text, color) {
+  praiseDiv.textContent = text;
+  praiseDiv.style.color = color;
+  praiseDiv.style.opacity = 1;
+  setTimeout(() => { praiseDiv.style.opacity = 0; }, 600);
+}
+
+// --- LICZNIKI MAS (KG) ---
+function updateMassCounters() {
+  const total = recycledKg + rejectKg;
+  massCounters.textContent =
+    "Całkowita masa: " + total.toFixed(0) + " kg" +
+    " | Recykling: " + recycledKg.toFixed(0) + " kg" +
+    " | Odrzut: " + rejectKg.toFixed(0) + " kg";
+}
+
+// --- OBLICZANIE PROCENTÓW ---
+function recomputePercents() {
+  const total = recycledKg + rejectKg;
+  if (total > 0) {
+    recycling = Math.round(100 * recycledKg / total);
+    reject = Math.round(100 * rejectKg / total);
+  } else {
+    recycling = 0;
+    reject = 0;
+  }
+}
+
+// --- TREND JAKOŚCI SEGREGACJI ---
+function updateTrend() {
+  // jeśli to pierwsza dostawa – nie ma trendu do porównania
+  if (chartPoints.length === 0) {
+    trendDiv.textContent = "Czekamy na 2 dostawy aby porównać";
+    trendDiv.style.color = "#444";
+    lastRecycling = recycling;  // ustawiamy punkt odniesienia
+    return;
+  }
+
+  if (recycling > lastRecycling) {
+    trendDiv.textContent = "Poprawa jakości segregacji";
+    trendDiv.style.color = "green";
+  } else if (recycling < lastRecycling) {
+    trendDiv.textContent = "Obniżenie jakości segregacji";
+    trendDiv.style.color = "red";
+  } else {
+    trendDiv.textContent = "Jakość segregacji bez zmian";
+    trendDiv.style.color = "#444";
+  }
+
+  lastRecycling = recycling;
+}
+
+// --- WYWOZ KOSZA ---
+function triggerTruck(bin) {
+
+  // komunikat ciężarówki
+  truckDiv.textContent = "🚛 Wywóz do sortowni (" + bin.label + ")";
+  truckDiv.style.opacity = 1;
+  setTimeout(() => { truckDiv.style.opacity = 0; }, 8000);
+
+  // masa błędna trafia do odrzutu dopiero teraz
+  const wrongMass = bin.wrong || 0;
+  if (wrongMass > 0) rejectKg += wrongMass;
+
+  // przeliczenie
+  recomputePercents();
+  updateMassCounters();
+  updateTrend();
+
+  // --- DOPISANIE PUNKTU DO WYKRESU ---
+  chartPoints.push({
+    mass: recycledKg + rejectKg,
+    rec: recycling,
+    color: bin.color
+  });
+
+  // reset kosza
+  bin.fill = 0;
+  bin.correct = 0;
+  bin.wrong = 0;
+  bin.trips++;
+
+  // warunek końca gry
+  if (bins.every(b => b.trips >= 1)) {
+    running = false;
+    trash = null;
+    showFinalReport();
+  }
+}
+
+// --- WRZUT ŚMIECIA ---
+function resolveTrash() {
+  if (!trash) return;
+
+// --- BLOKADA: PSZOK nie może trafić do kosza ---
+  if (trash.correct === "pszok") {
+      // nic nie robimy, śmieć PSZOK nie może być wrzucony
+      return;
+  }
+
+  const bin = bins[activeBin];
+
+  bin.fill += trash.weight;
+
+  if (bin.name === trash.correct) {
+    recycledKg += trash.weight;
+    bin.correct = (bin.correct || 0) + trash.weight;
+
+    flashBinIndex = activeBin;
+    flashColor = "rgba(0,255,0,0.4)";
+    flashIcon = "👍";
+    flashTimer = 30;
+    showPraise("OK", "green");
+
+  } else {
+    bin.wrong = (bin.wrong || 0) + trash.weight;
+
+    // --- BŁĘDNY WRZUT DO ZMIESZANYCH ---
+    if (bin.name === "zmieszane" && trash.correct !== "zmieszane") {
+        wrongToMixedKg += trash.weight;
+    }
+
+    flashBinIndex = activeBin;
+    flashColor = "rgba(255,0,0,0.4)";
+    flashIcon = "👎";
+    flashTimer = 25;
+    showPraise("ŹLE", "red");
+}
+
+if (bin.fill >= bin.capacity) {
+    triggerTruck(bin);
+    if (!running) return;
+  }
+
+  spawnTrash();
+}
+
+// --- RAPORT KOŃCOWY ---
+function showFinalReport() {
+
+  // jeśli sortownia nie dostała ani 1 kg
+  if (rejectKg === 0) {
+      endDiv.innerHTML =
+        "SORTOWNIA – RAPORT NIEMOŻLIWY<br><br>" +
+        "Żadne odpady nie trafiły do sortowni.<br>" +
+        "Gra została zakończona przed pierwszym wywozem ciężarówki.";
+      endDiv.style.color = "black";
+      endDiv.style.opacity = 1;
+      return;
+  }
+
+  // --- PODSTAWOWY RAPORT ---
+  let text = "SORTOWNIA – RAPORT KOŃCOWY<br><br>" +
+             "Odrzut: " + reject + "%<br>" +
+             "Poziom recyklingu: " + recycling + "%<br><br>";
+
+  if (reject < 40) {
+    text += "<span style='color:green;'>Mniejszy odrzut – dziękujemy!</span>";
+    endDiv.style.color = "green";
+  } else {
+    text += "<span style='color:red;'>Większy odrzut – wzrosną podatki!</span>";
+    endDiv.style.color = "red";
+  }
+
+  // --- EDUKACJA: BŁĘDY W ZMIESZANYCH ---
+  text += "<br><br><b>Kontrola w zmieszanych:</b><br>";
+
+  if (wrongToMixedKg > 0) {
+
+      // całkowita masa odpadów = to, co trafiło do sortowni + to, co zmarnowano w zmieszanych
+      const total = recycledKg + rejectKg + wrongToMixedKg;
+
+      // idealny recykling = to, co poszło dobrze + to, co zmarnowano w zmieszanych
+      const ideal = recycledKg + wrongToMixedKg;
+
+      const currentRecycling = Math.round(100 * recycledKg / total);
+      const idealRecycling = Math.round(100 * ideal / total);
+      const improvement = idealRecycling - currentRecycling;
+
+      // procent błędów w zmieszanych względem całej masy odpadów
+      const wrongPercent = Math.round(100 * wrongToMixedKg / total);
+
+      text += "Zmarnowałeś w zmieszanych: <b>" + wrongToMixedKg.toFixed(0) + " kg</b>";
+      text += " (<b>" + wrongPercent + "%</b> wszystkich odpadów)<br>";
+
+      text += "Poziom recyklingu w tej grze: <b>" + currentRecycling + "%</b><br>";
+      text += "Gdybyś dobrze segregował, byłoby: <b>" + idealRecycling + "%</b><br>";
+      text += "Różnica dla gminy: <b>+" + improvement + "</b><br>";
+
+  } else {
+      text += "Brak błędów — bardzo dobrze!<br>";
+  }
+
+  endDiv.innerHTML = text;
+  endDiv.style.opacity = 1;
+}
+
+
+// --- RYSOWANIE ---
+function draw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // przesuwanie wykresu
+  if (chartPoints.length > 0) {
+    let last = chartPoints[chartPoints.length - 1];
+    let lastX = 20 + last.mass * 5;
+    let limit = canvas.width * 0.5;
+    if (lastX - chartOffsetX > limit) {
+      chartOffsetX = lastX - limit;
+    }
+  }
+
+  // linia wykresu
+  ctx.beginPath();
+  ctx.strokeStyle = "rgba(0, 120, 0, 0.35)";
+  ctx.lineWidth = 2;
+
+  for (let i = 0; i < chartPoints.length; i++) {
+    let p = chartPoints[i];
+    let y = chartBottom - (p.rec / 100) * chartHeight;
+    let x = 20 + p.mass * 5 - chartOffsetX;
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+
+  // pionowe kreski dostaw
+  for (let p of chartPoints) {
+    let x = 20 + p.mass * 5 - chartOffsetX;
+    ctx.beginPath();
+    ctx.strokeStyle = p.color;
+    ctx.lineWidth = 3;
+    ctx.moveTo(x, chartBottom);
+    ctx.lineTo(x, chartTop);
+    ctx.stroke();
+  }
+
+  // linia 55%
+  let requiredY = chartBottom - 0.55 * chartHeight;
+  ctx.beginPath();
+  ctx.strokeStyle = "rgba(255, 0, 0, 0.5)";
+  ctx.lineWidth = 1;
+  ctx.moveTo(20, requiredY);
+  ctx.lineTo(canvas.width - 20, requiredY);
+  ctx.stroke();
+
+  ctx.fillStyle = "red";
+  ctx.font = "12px Arial";
+  ctx.fillText("55% wymagane", canvas.width - 110, requiredY - 5);
+
+  // kosze
+  bins.forEach((b, i) => {
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = b.color;
+    ctx.strokeRect(b.x - 35, 380, 80, 60);
+
+    const h = Math.max(0, Math.min(1, b.fill / b.capacity)) * 60;
+    ctx.fillStyle = "rgba(0,0,0,0.25)";
+    ctx.fillRect(b.x - 35, 380 + 60 - h, 80, h);
+
+    if (i === flashBinIndex && flashTimer > 0 && flashColor) {
+      ctx.fillStyle = flashColor;
+      ctx.fillRect(b.x - 35, 380, 80, 60);
+    }
+
+    ctx.fillStyle = "black";
+    ctx.font = "11px Arial";
+    ctx.textAlign = "center";
+    ctx.fillText(b.label, b.x, 375);
+
+    ctx.font = "12px Arial";
+    ctx.fillText(b.fill.toFixed(0) + " / " + b.capacity + " kg", b.x, 410);
+
+    if (i === flashBinIndex && flashTimer > 0 && flashIcon) {
+      ctx.font = "20px Arial";
+      ctx.fillText(flashIcon, b.x, 430);
+    }
+
+    if (i === activeBin) {
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = "red";
+      ctx.strokeRect(b.x - 45, 375, 90, 70);
+    }
+  });
+
+  // śmieć
+  if (trash) {
+    ctx.fillStyle = "black";
+    ctx.beginPath();
+    ctx.arc(trash.x, trash.y, 14, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.font = "13px Arial";
+    ctx.textAlign = "left";
+    ctx.fillText(trash.name, trash.x + 24, trash.y - 4);
+  }
+
+  // statystyki %
+  statsDiv.textContent =
+    "Całkowita masa = 100% | Recykling: " + recycling + "% | Odrzut: " + reject + "%";
+}
+
+// --- LOGIKA ---
+function update() {
+  if (!running || paused) return;
+
+  if (flashTimer > 0) {
+    flashTimer--;
+    if (flashTimer === 0) {
+      flashBinIndex = -1;
+      flashColor = null;
+      flashIcon = null;
+    }
+  }
+
+  if (trash) {
+    const speed = trash.speed * Number(speedSlider.value);
+    trash.y += speed;
+
+    if (trash.y >= 366) {
+      resolveTrash();
+    }
+  }
+}
+
+// --- PĘTLA GRY ---
+function gameLoop() {
+  update();
+  draw();
+  requestAnimationFrame(gameLoop);
+}
+gameLoop();
+
+// --- STEROWANIE ---
+document.addEventListener("keydown", e => {
+
+  // --- WYBUCH ŚMIECI PSZOK (strzałka w górę) ---
+if (e.key === "ArrowUp") {
+    if (trash && trash.correct === "pszok") {
+
+        // efekt wybuchu w canvasie
+        flashBinIndex = -1;
+        flashColor = "rgba(255,255,0,0.5)";
+        flashIcon = "💥";
+        flashTimer = 120; // dłuższy efekt w canvasie
+
+        // GIGANTYCZNY BOOM NA ŚRODKU EKRANU
+        const boom = document.getElementById("boomEffect");
+        boom.textContent = "💥";
+        boom.style.opacity = 1;
+
+        // wygaszenie po chwili
+        setTimeout(() => {
+            boom.style.opacity = 0;
+        }, 1500);
+
+        showPraise("PSZOK – BRAWO!", "green");
+
+        // opóźnienie nowego śmiecia, żeby gracz zobaczył efekt
+        setTimeout(() => {
+            spawnTrash();
+        }, 1500);
+
+        return;
+    }
+}
+// --- JEŚLI ŚMIEĆ PSZOK, A UŻYTO INNEGO KLAWISZA ---
+if (trash && trash.correct === "pszok") {
+    if (e.key !== "ArrowUp") {
+
+        flashBinIndex = -1;
+        flashColor = "rgba(255,0,0,0.5)";
+        flashIcon = "⚠️";
+        flashTimer = 150;
+
+        // GIGANTYCZNY OSTRZEGAWCZY BOOM
+        const boom = document.getElementById("boomEffect");
+        boom.textContent = "⚠️";
+        boom.style.opacity = 1;
+
+        setTimeout(() => {
+            boom.style.opacity = 0;
+        }, 1500);
+
+        showPraise("ŹLE! To był PSZOK!", "red");
+
+        setTimeout(() => {
+            spawnTrash();
+        }, 1500);
+
+        return;
+    }
+}
+
+  // --- NORMALNE STEROWANIE KOSZAMI ---
+  if (e.key === "ArrowLeft") {
+      if (activeBin > 0) activeBin--;
+
+  } else if (e.key === "ArrowRight") {
+      if (activeBin < bins.length - 1) activeBin++;
+
+  } else if (e.key === "ArrowDown") {
+      if (running && !paused && trash) resolveTrash();
+  }
+
+});
+
+</script>
+</body>
+</html>
+
